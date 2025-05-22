@@ -1,7 +1,16 @@
+using System.Runtime.CompilerServices;
 using Oracle.ManagedDataAccess.Client;
 
 public sealed class OracleExecutor : IDisposable
 {
+    static OracleExecutor()
+    {
+        OracleConfiguration.TraceLevel = 7;
+        OracleConfiguration.TraceFileLocation = GetTraceFileLocation();
+    }
+
+    private static string GetTraceFileLocation([CallerFilePath] string path = "") => Path.Combine(Path.GetDirectoryName(path)!, "bin");
+
     private readonly OracleConnection _connection;
     private readonly OracleConnectionStringBuilder _connectionString;
 

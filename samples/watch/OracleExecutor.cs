@@ -50,5 +50,25 @@ public sealed class OracleExecutor : IDisposable
         {
         }
         Console.WriteLine(" ✅ ");
+
+        PrintNotificationRegistrations();
+    }
+
+    private void PrintNotificationRegistrations()
+    {
+        using var command = new OracleCommand("SELECT REGID, TABLE_NAME FROM USER_CHANGE_NOTIFICATION_REGS", _connection);
+        using var reader = command.ExecuteReader();
+        var hasRegistration = false;
+
+        while (reader.Read())
+        {
+            Console.WriteLine($"🔔 Registration {reader.GetValue(0)} on {reader.GetValue(1)}");
+            hasRegistration = true;
+        }
+
+        if (!hasRegistration)
+        {
+            Console.WriteLine("🔕 No registrations found.");
+        }
     }
 }

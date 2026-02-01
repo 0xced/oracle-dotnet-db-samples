@@ -1,7 +1,8 @@
+using System.Data;
 using System.Runtime.CompilerServices;
 using Oracle.ManagedDataAccess.Client;
 
-public sealed class OracleExecutor : IDisposable
+public sealed class OracleExecutor : IAsyncDisposable
 {
     static OracleExecutor()
     {
@@ -22,54 +23,72 @@ public sealed class OracleExecutor : IDisposable
             _connectionString.UserID = "SYS";
             _connectionString.DBAPrivilege = "SYSDBA";
         }
-        _connection = new OracleConnection(_connectionString.ConnectionString);
-        _connection.UseClientInitiatedCQN = true;
-        _connection.Open();
+        _connection = new OracleConnection(_connectionString.ConnectionString) { UseClientInitiatedCQN = true };
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        _connection.Dispose();
+        await _connection.DisposeAsync();
     }
 
     public string UserId => _connectionString.UserID;
 
-    public void ExecuteNonQuery(string sql)
+    public async Task ExecuteNonQueryAsync(string sql, CancellationToken cancellationToken)
     {
-        using var command = new OracleCommand(sql, _connection);
+        await OpenConnectionAsync(cancellationToken);
+
+        await using var command = new OracleCommand(sql, _connection);
         Console.Write($"▶️ {sql}");
-        command.ExecuteNonQuery();
+        await command.ExecuteNonQueryAsync(cancellationToken);
         Console.WriteLine(" ✅ ");
     }
 
-    public void Watch(string sql, OnChangeEventHandler onChange)
+    public async Task<OracleNotificationEventArgs> WatchAsync(string sql, Func<Task> onRegisteredAsync, TimeSpan timeout, CancellationToken cancellationToken)
     {
+        var watchCompletionSource = new TaskCompletionSource<OracleNotificationEventArgs>();
+        cancellationToken.Register(() => watchCompletionSource.TrySetCanceled());
+
+        await OpenConnectionAsync(cancellationToken);
+
         var watchCommand = new OracleCommand(sql, _connection);
 
-        var dependency = new OracleDependency(cmd: watchCommand, isNotifiedOnce: true, timeout: 300, isPersistent: false);
-        dependency.OnChange += (sender, args) =>
+        var dependencyTimeout = Convert.ToInt32(timeout.Add(TimeSpan.FromSeconds(10)).TotalSeconds);
+        var dependency = new OracleDependency(cmd: watchCommand, isNotifiedOnce: true, timeout: dependencyTimeout, isPersistent: false);
+        dependency.OnChange += (_, args) =>
         {
             watchCommand.Dispose();
-            onChange(sender, args);
+            watchCompletionSource.SetResult(args);
         };
 
         Console.Write($"👁️ {sql}");
-        using var reader = watchCommand.ExecuteReader();
-        while (reader.Read())
+        await using var reader = await watchCommand.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
         {
         }
         Console.WriteLine(" ✅ ");
 
-        PrintNotificationRegistrations();
+        await PrintNotificationRegistrationsAsync(cancellationToken);
+
+        await onRegisteredAsync();
+
+        return await watchCompletionSource.Task.WaitAsync(timeout, cancellationToken);
     }
 
-    private void PrintNotificationRegistrations()
+    private async Task OpenConnectionAsync(CancellationToken cancellationToken)
     {
-        using var command = new OracleCommand("SELECT REGID, TABLE_NAME FROM USER_CHANGE_NOTIFICATION_REGS", _connection);
-        using var reader = command.ExecuteReader();
+        if (_connection.State == ConnectionState.Closed)
+        {
+            await _connection.OpenAsync(cancellationToken);
+        }
+    }
+
+    private async Task PrintNotificationRegistrationsAsync(CancellationToken cancellationToken)
+    {
+        await using var command = new OracleCommand("SELECT REGID, TABLE_NAME FROM USER_CHANGE_NOTIFICATION_REGS", _connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var hasRegistration = false;
 
-        while (reader.Read())
+        while (await reader.ReadAsync(cancellationToken))
         {
             Console.WriteLine($"🔔 Registration {reader.GetValue(0)} on {reader.GetValue(1)}");
             hasRegistration = true;

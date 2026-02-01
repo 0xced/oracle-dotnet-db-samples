@@ -22,11 +22,9 @@ async Task<int> RunAsync(CancellationToken cancellationToken)
     await container.StartAsync(cancellationToken);
     var connectionString = container.GetConnectionString();
 
-    await using var executor = new OracleExecutor(connectionString, sysDba: false);
-    await using (var sysDbaExecutor = new OracleExecutor(connectionString, sysDba: true))
-    {
-        await sysDbaExecutor.ExecuteNonQueryAsync($"grant change notification to {executor.UserId}", cancellationToken);
-    }
+    var executor = new OracleExecutor(connectionString, sysDba: false);
+    var sysDbaExecutor = new OracleExecutor(connectionString, sysDba: true);
+    await sysDbaExecutor.ExecuteNonQueryAsync($"grant change notification to {executor.UserId}", cancellationToken);
 
     await executor.ExecuteNonQueryAsync("create table dept (deptno number(2,0), dname varchar2(14), loc varchar2(13), constraint pk_dept primary key (deptno))", cancellationToken);
 

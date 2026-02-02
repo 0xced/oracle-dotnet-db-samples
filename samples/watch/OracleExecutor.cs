@@ -29,39 +29,44 @@ public sealed class OracleExecutor
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = new OracleCommand(sql, connection);
-        Console.Write($"▶️ {sql}");
+        Console.WriteLine($"▶️ {sql}");
         await command.ExecuteNonQueryAsync(cancellationToken);
-        Console.WriteLine(" ✅ ");
     }
 
-    public async Task<OracleNotificationEventArgs> WatchAsync(string sql, Func<Task> onRegisteredAsync, TimeSpan timeout, CancellationToken cancellationToken)
+    public async IAsyncEnumerable<OracleNotificationEventArgs> WatchAsync(string sql, TimeSpan timeout, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var watchCompletionSource = new TaskCompletionSource<OracleNotificationEventArgs>();
-        cancellationToken.Register(() => watchCompletionSource.TrySetCanceled());
-
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        var watchCommand = new OracleCommand(sql, connection);
-
-        var dependencyTimeout = Convert.ToInt32(timeout.Add(TimeSpan.FromSeconds(10)).TotalSeconds);
-        var dependency = new OracleDependency(cmd: watchCommand, isNotifiedOnce: true, timeout: dependencyTimeout, isPersistent: false);
-        dependency.OnChange += (_, args) =>
+        while (!cancellationToken.IsCancellationRequested)
         {
+            var watchCompletionSource = new TaskCompletionSource<OracleNotificationEventArgs>();
+            await using var _ = cancellationToken.Register(() => watchCompletionSource.TrySetCanceled());
+
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            var watchCommand = new OracleCommand(sql, connection);
+
+            var dependencyTimeout = Convert.ToInt32(timeout.Add(TimeSpan.FromSeconds(10)).TotalSeconds);
+            var dependency = new OracleDependency(cmd: watchCommand, isNotifiedOnce: true, timeout: dependencyTimeout, isPersistent: false);
+            dependency.OnChange += (_, args) => watchCompletionSource.SetResult(args);
+
+            Console.WriteLine($"👁️ {sql}");
+            await using var reader = await watchCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+            }
+
+            await PrintNotificationRegistrationsAsync(cancellationToken);
+
+            var completedTask = await Task.WhenAny(watchCompletionSource.Task, Task.Delay(timeout, cancellationToken));
             watchCommand.Dispose();
-            watchCompletionSource.SetResult(args);
-        };
 
-        Console.Write($"👁️ {sql}");
-        await using var reader = await watchCommand.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
+            if (completedTask == watchCompletionSource.Task)
+            {
+                yield return await watchCompletionSource.Task;
+            }
+            else
+            {
+                Console.WriteLine($"⏳ Timeout reached ({timeout})");
+            }
         }
-        Console.WriteLine(" ✅ ");
-
-        await PrintNotificationRegistrationsAsync(cancellationToken);
-
-        await onRegisteredAsync();
-
-        return await watchCompletionSource.Task.WaitAsync(timeout, cancellationToken);
     }
 
     private async Task<OracleConnection> OpenConnectionAsync(CancellationToken cancellationToken)

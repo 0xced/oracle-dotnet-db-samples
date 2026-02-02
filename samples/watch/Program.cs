@@ -5,7 +5,7 @@ try
     var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, _) => cts.Cancel();
 
-    await using var container = new OracleBuilder().WithImage("gvenzl/oracle-free:23-slim-faststart").WithName("OracleDependency").WithReuse(true).Build();
+    await using var container = new OracleBuilder("gvenzl/oracle-free:23-slim-faststart").WithName("OracleDependency").WithReuse(true).Build();
     await container.StartAsync(cts.Token);
     var connectionString = container.GetConnectionString();
 
